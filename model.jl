@@ -47,20 +47,12 @@ function quaddu(nn)
         Ix = p[1]
         Iy = p[2]
         Iz = p[3]
-        #nn_out = nn(u[7:9])
-        #println([Ix,Iy,Iz])
-        #println(nn_out)
-        #fwx = nn_out[1]*10^-6
-        #fwy = nn_out[2]*10^-6
-        #fwz = nn_out[3]*10^-6
-
-        fwx = -p[4]*u[7]+p[7]*abs(u[7])*u[7]
-        fwy = -p[5]*u[8]+p[8]*abs(u[8])*u[8]
-        fwz = -p[6]*u[9]+p[9]*abs(u[9])*u[9]
+        fwx = 0.0
+        fwy = 0.0
+        fwz = 0.0
         # u[13:16] should be set by discrete callback
         # Calculate forces from input signals
         ft, τx, τy, τz = motors(u[13], u[14], u[15], u[16])
-        #println(u)
 
         # You have to estimate the extra forces someway here
 
@@ -137,42 +129,42 @@ Dense64(n1, n2, σ=identity) = Dense(n1, n2, σ,
                             initb = (d...) -> zeros(d...))
 
 ## neural-network in diff eq
-nn = Chain(Dense64(3,3),Dense64(3,3))
+nn = Chain(Dense64(3,3))
 
 # Diff-eq definition, with network
 contsystem_rd = quaddu(nn)
 
 # Generate a controller that follows a reference, given continuous references
-refcontroller(ref,ref_rdn) = (t,state) -> statefeedback(t, state, ref(t), ref_rdn(t))
+refcontroller(ref) = (t,state) -> statefeedback(t, state, ref(t))
 # # generate a controller that follows a reference, given discrete references "rd"
-refcont(rd,rdns) = refcontroller(zoh(rd, dt),zoh(rdns,dt))
+refcont(rd) = refcontroller(zoh(rd, dt))
 
 # Problem for simulation
-prob_model(u0, rd,rdns,p_guess) = ODEProblem(contsystem_rd, u0, tspan, p_guess, callback=callbackcontroller(refcont(rd,rdns), t))
+prob_model(u0, rd, p_guess) = ODEProblem(contsystem_rd, u0, tspan, p_guess, callback=callbackcontroller(refcont(rd), t))
 
 # Predict x, y, z
-function predict(u0, rd,rdns, p_guess)
+function predict(u0, rd, p_guess)
     # Using DiffEqFlux ReverseDiff
-    sol = diffeq_rd(p_guess, prob_model(u0, rd,rdns, p_guess),  u0=u0, Tsit5(), tstops=t, saveat=Float64[0.0])
+    sol = diffeq_rd(p_guess, prob_model(u0, rd, p_guess),  u0=u0, Tsit5(), tstops=t, saveat=Float64[0.0])
     # Get the x,y,z coordinates only
     reduce(hcat, getindex.(sol.u, (10:12,)))
 end
 
 include("data.jl")
 
-u0s, rds, rdns, yreals = data2()
-p_guess = param([6,7,11,5,5,5,5,5,5]*10^-6)
-predict(u0s[1], rds[1],rdns[1],p_guess)
-#print(loss_rd(u0s[1],rds[1],rdns[1],yreals[1]))
-function loss_rd2(u0,rds,rdns,y_real)
-    pred = predict(u0,rds,rdns,p_guess)
+u0s, rds, rdns, yreals = data1()
+p_guess = param([6,7,11]*10^-6)
+predict(u0s[1], rds[1], p_guess)
+
+function loss_rd(u0,rds,y_real)
+    pred = predict(u0,rds,p_guess)
     diff = y_real.-pred
     loss = norm([ norm(diff[i]) for i in 1:size(diff)[2]],2)
     return loss
 end
 cb = function ()
     # Calculate loss of first trajectory in data set
-    display(loss_rd(uins[1], u0s[1],rnds[1], yreals[1]))
+    display(loss_rd(uins[1], u0s[1], yreals[1]))
     plt = plot(layout=2)
     # Plot predicted and real trajectory for first data point
     plot!(plt, data(predict_rd(uins[1], u0s[1]))[:], lab="", c=:red, subplot=1)
@@ -183,11 +175,11 @@ cb = function ()
     display(plt)
 end
 
-traindata = cycle(zip(u0s,rds,rdns,yreals))
+traindata = cycle(zip(u0s,rds,yreals))
 #Optimizer ADAM, see ?ADAM for info
 opt = ADAM()
 # Set learning rate without forgetting internal state
-opt.eta = 10^-7
+opt.eta = 10^-6
 # Train over all parameters in nn, as well as p using loss-function loss_rd
 # Take the first 300 of (infinite) cycling traindata
 # Call the callback function no more than every 2 seconds
@@ -195,11 +187,10 @@ opt.eta = 10^-7
 cb2 = function ()
     #display(loss_rd(u0s[1],rds[1],yreals[1]))
     plt = plot(layout=2)
-    traject = map(Tracker.data,(predict(u0s[1],rds[1],rdns[1],p_guess)[1,:]))
-    plot(traject)
-    display(plot!(yreals[1][1,:]))
-    println(loss_rd(u0s[1],rds[1],rdns[1],yreals[1]))
+    traject = map(Tracker.data,(predict(u0s[1],rds[1],p_guess)[1,:]))
+    plot!(plt,traject)
+    plot!(plt,yreals[1][1,:])
+    println(loss_rd(u0s[1],rds[1],yreals[1]))
     #Flux.stop()
 end
-#println(take(traindata,1))
-Flux.train!(loss_rd2, params(p_guess), take(traindata,100), opt, cb = throttle(cb2,2))
+Flux.train!(loss_rd, params(p_guess), take(traindata,30), opt, cb = throttle(cb2,15))
