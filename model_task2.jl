@@ -47,12 +47,19 @@ function quaddu(nn)
         Ix = p[1]
         Iy = p[2]
         Iz = p[3]
-        fwx = 0.0
-        fwy = 0.0
-        fwz = 0.0
+        nn_out = nn(u[7:9])
+        #println(nn_out)
+        fwx = nn_out[1]*0.01
+        fwy = nn_out[2]*0.01
+        fwz = nn_out[3]*0.01
+
+        #fwx = 0.0
+        #fwy = 0.0
+        #fwz = 0.0
         # u[13:16] should be set by discrete callback
         # Calculate forces from input signals
         ft, τx, τy, τz = motors(u[13], u[14], u[15], u[16])
+        #println(u)
 
         # You have to estimate the extra forces someway here
 
@@ -129,7 +136,7 @@ Dense64(n1, n2, σ=identity) = Dense(n1, n2, σ,
                             initb = (d...) -> zeros(d...))
 
 ## neural-network in diff eq
-nn = Chain(Dense64(3,3))
+nn = Chain(Dense64(3,3,relu),Dense64(3,3,relu))
 
 # Diff-eq definition, with network
 contsystem_rd = quaddu(nn)
@@ -152,10 +159,10 @@ end
 
 include("data.jl")
 
-u0s, rds, rdns, yreals = data1()
+u0s, rds, rdns, yreals = data2()
 p_guess = param([6,7,11]*10^-6)
 predict(u0s[1], rds[1], p_guess)
-
+print(loss_rd(u0s[1],rds[1],yreals[1]))
 function loss_rd(u0,rds,y_real)
     pred = predict(u0,rds,p_guess)
     diff = y_real.-pred
@@ -188,9 +195,9 @@ cb2 = function ()
     #display(loss_rd(u0s[1],rds[1],yreals[1]))
     plt = plot(layout=2)
     traject = map(Tracker.data,(predict(u0s[1],rds[1],p_guess)[1,:]))
-    plot!(plt,traject)
-    plot!(plt,yreals[1][1,:])
+    plot(traject)
+    display(plot!(yreals[1][1,:]))
     println(loss_rd(u0s[1],rds[1],yreals[1]))
     #Flux.stop()
 end
-Flux.train!(loss_rd, params(p_guess), take(traindata,30), opt, cb = throttle(cb2,15))
+Flux.train!(loss_rd, params(p_guess,nn), take(traindata,100), opt, cb = throttle(cb2,15))
