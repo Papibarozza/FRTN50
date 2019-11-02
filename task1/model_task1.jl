@@ -7,6 +7,7 @@ import Base.Iterators: cycle, take  # Useful to iterate over training data
 using JLD2, FileIO
 
 
+
 """ u(t) = zoh(ud, dt)
      ZeroOrderHold hold of function ud,
     assuming u(t) = ud[1] 0<=t<dt """
@@ -145,19 +146,15 @@ prob_model(u0, rd, p_guess) = ODEProblem(contsystem_rd, u0, tspan, p_guess, call
 # Predict x, y, z
 function predict(u0, rd, p_guess)
     # Using DiffEqFlux ReverseDiff
-    println("Solving in function predict(u0, rd, p_guess)..")
+    #println("Solving in function predict(u0, rd, p_guess)..")
     sol = diffeq_rd(p_guess, prob_model(u0, rd, p_guess),  u0=u0, Tsit5(), tstops=t, saveat=Float64[0.0])
-    println("Done")
+    #println("Done")
     # Get the x,y,z coordinates only
     reduce(hcat, getindex.(sol.u, (10:12,)))
 end
 
-include("data.jl")
-
-u0s, rds, rdns, yreals = data1()
-p_guess = param([6,7,11]*10^-6)
-predict(u0s[1], rds[1], p_guess)
-print(loss_rd(u0s[1],rds[1],yreals[1]))
+#predict(u0s[1], rds[1], p_guess)
+#print(loss_rd(u0s[1],rds[1],yreals[1]))
 function loss_rd(u0,rds,y_real)
     pred = predict(u0,rds,p_guess)
     diff = y_real.-pred
@@ -165,7 +162,6 @@ function loss_rd(u0,rds,y_real)
     return loss
 end
 
-traindata = cycle(zip(u0s,rds,yreals))
 #Optimizer ADAM, see ?ADAM for info
 opt = ADAM()
 # Set learning rate without forgetting internal state
@@ -184,4 +180,41 @@ cb2 = function ()
     println(loss_rd(u0s[1],rds[1],yreals[1]))
     #Flux.stop()
 end
-Flux.train!(loss_rd, params(p_guess), take(traindata,100), opt, cb = throttle(cb2,15))
+function plotfun(i=1)
+    plt = plot(layout=2)
+    trajectx = map(Tracker.data,(predict(u0s[i],rds[i],p_guess)[1,:]))
+    trajecty = map(Tracker.data,(predict(u0s[i],rds[i],p_guess)[2,:]))
+    trajectz = map(Tracker.data,(predict(u0s[i],rds[i],p_guess)[3,:]))
+    display(plot(trajectx,lab="prediction-x"))
+    display(plot!(trajecty,lab="prediction-y"))
+    display(plot!(trajectz,lab="prediction-z"))
+    display(plot!(yreals[i][1,:],lab="real-x"))
+    display(plot!(yreals[i][2,:],lab="real-y"))
+    display(plot!(yreals[i][3,:],lab="real-z"))
+    println(loss_rd(u0s[i],rds[i],yreals[i]))
+end
+
+
+
+
+include("../validation_tools.jl")
+include("data.jl")
+
+u0s, rds, rdns, yreals = data1()
+params_guessed = zeros(3,10)
+loss = 0
+p_guess = param([6,7,11]*10^-6)
+for k = 1
+    println(k)
+    idxs_test, idxs_train = partition_idxs(15,5)
+    global p_guess = param([6,7,11]*10^-6)
+    traindata = cycle(zip(u0s[idxs_train],rds[idxs_train],yreals[idxs_train]))
+    testdata = cycle(zip(u0s[idxs_test],rds[idxs_test],yreals[idxs_test]))
+    Flux.train!(loss_rd, params(p_guess), take(traindata,100), opt,cb=plotfun)
+    for j in idxs_test
+        global loss+=loss_rd2(u0s[j],rds[j],rdns[j],yreals[j])
+    end
+    params_guessed[:,k] = data(p_guess)
+end
+println(loss/50)
+println(params_guessed*10^6)
